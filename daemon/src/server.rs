@@ -10,6 +10,7 @@ use axum::http::header::{self, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Local};
+use include_dir::{Dir, include_dir};
 use log::{error, warn};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -20,6 +21,8 @@ use tokio::sync::mpsc::Sender;
 use tokio_util::compat::FuturesAsyncWriteCompatExt;
 use tokio_util::io::ReaderStream;
 use tokio_util::sync::CancellationToken;
+
+static WEB: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web/build");
 
 use crate::analysis::{AnalysisCtrlMessage, AnalysisStatus};
 use crate::config::Config;
@@ -90,37 +93,36 @@ pub async fn get_qmdl(
 pub async fn serve_static(
     State(_): State<Arc<ServerState>>,
     Path(path): Path<String>,
-) -> impl IntoResponse {
-    let path = path.trim_start_matches('/');
+) -> Response {
+    let p = path.trim_start_matches('/');
+    // Map /cells → cells.html
+    let p = if p == "cells" { "cells.html" } else { p };
 
-    match path {
-        "rayhunter_orca_only.png" => (
-            [(header::CONTENT_TYPE, HeaderValue::from_static("image/png"))],
-            include_bytes!("../web/build/rayhunter_orca_only.png"),
-        )
-            .into_response(),
-        "rayhunter_text.png" => (
-            [(header::CONTENT_TYPE, HeaderValue::from_static("image/png"))],
-            include_bytes!("../web/build/rayhunter_text.png"),
-        )
-            .into_response(),
-        "favicon.png" => (
-            [(header::CONTENT_TYPE, HeaderValue::from_static("image/png"))],
-            include_bytes!("../web/build/favicon.png"),
-        )
-            .into_response(),
-        "index.html" => (
-            [
-                (header::CONTENT_TYPE, HeaderValue::from_static("text/html")),
-                (header::CONTENT_ENCODING, HeaderValue::from_static("gzip")),
-            ],
-            include_bytes!("../web/build/index.html.gz"),
-        )
-            .into_response(),
-        path => {
-            warn!("404 on path: {path}");
-            StatusCode::NOT_FOUND.into_response()
+    if let Some(file) = WEB.get_file(p) {
+        let ct = match std::path::Path::new(p).extension().and_then(|e| e.to_str()) {
+            Some("html") => "text/html",
+            Some("css") => "text/css",
+            Some("js") => "application/javascript",
+            Some("json") => "application/json",
+            Some("png") => "image/png",
+            Some("svg") => "image/svg+xml",
+            Some("ico") => "image/x-icon",
+            Some("woff2") => "font/woff2",
+            Some("gz") => "text/html",
+            _ => "application/octet-stream",
+        };
+        let content_type = HeaderValue::from_static(ct);
+        let body: Vec<u8> = file.contents().to_vec();
+        let mut resp = Response::new(body.into());
+        resp.headers_mut().insert(header::CONTENT_TYPE, content_type);
+        if p.ends_with(".gz") {
+            resp.headers_mut()
+                .insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
         }
+        resp
+    } else {
+        warn!("404 on path: {p}");
+        StatusCode::NOT_FOUND.into_response()
     }
 }
 

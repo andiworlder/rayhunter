@@ -34,7 +34,7 @@
             saving = true;
             await set_config(config);
             message =
-                'Config saved successfully! Rayhunter is restarting now. Reload the page in a few seconds.';
+                'Config saved successfully! BRIMOB is restarting now. Reload the page in a few seconds.';
             messageType = 'success';
         } catch (error) {
             message = `Failed to save config: ${error}`;
@@ -95,7 +95,7 @@
                         <option value={4}>4 - High visibility (full screen color)</option>
                     </select>
                     <p class="text-xs text-gray-500 mt-1">
-                        Note: Rayhunter draws over the device's native UI, so some flickering is
+                        Note: BRIMOB draws over the device's native UI, so some flickering is
                         expected
                     </p>
                 </div>

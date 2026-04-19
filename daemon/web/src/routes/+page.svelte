@@ -58,8 +58,9 @@
 <LogView bind:shown={logview_shown} />
 <ConfigForm bind:shown={config_shown} />
 <div class="p-4 xl:px-8 bg-rayhunter-blue drop-shadow flex flex-row justify-between items-center">
-    <!-- https://www.w3.org/WAI/tutorials/images/decorative/ -->
-    <img src="/rayhunter_text.png" alt="" class="h-10 xl:h-12" />
+    <div class="flex items-center gap-2">
+        <div class="text-3xl xl:text-4xl font-black tracking-wider text-white">BRIMOB</div>
+    </div>
     <div class="flex flex-row gap-4">
         <button onclick={() => (logview_shown = true)} class="flex flex-row gap-1 group">
             <span class="hidden text-white group-hover:text-gray-400 lg:flex">Logs</span>
@@ -245,7 +246,7 @@
                 Connection Error
             </span>
             <span
-                >This webpage is not currently receiving updates from your Rayhunter device. This
+                >This webpage is not currently receiving updates from your BRIMOB device. This
                 could be due to loss of connection or some issue with your device.</span
             >
             {#if update_error}
@@ -292,7 +293,7 @@
                         WARNING: Not Running
                     </span>
                     <span>
-                        Rayhunter is not currently running and will not detect abnormal behavior!
+                        BRIMOB is not currently running and will not detect abnormal behavior!
                     </span>
                     <div class="flex flex-row justify-end mt-2">
                         <RecordingControls server_is_recording={!!current_entry} />
@@ -324,8 +325,7 @@
         <DeleteAllButton />
     {:else}
         <div class="flex flex-col justify-center items-center">
-            <!-- https://www.w3.org/WAI/tutorials/images/decorative/ -->
-            <img src="/rayhunter_orca_only.png" alt="" class="h-48 animate-spin" />
+            <div class="text-6xl font-black animate-spin text-blue-900">BRIMOB</div>
             <p class="text-xl">Loading...</p>
         </div>
     {/if}

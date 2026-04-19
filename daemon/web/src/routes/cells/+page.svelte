@@ -119,7 +119,7 @@
 
 <div class="p-4 bg-rayhunter-blue text-white flex justify-between items-center">
     <div>
-        <div class="text-lg font-black">RAYHUNTER MONITOR</div>
+        <div class="text-lg font-black">BRIMOB MONITOR</div>
         <div class="text-xs opacity-80">
             {mode.toUpperCase()} · {refresh_seconds}s · {total_cells} cells
         </div>
