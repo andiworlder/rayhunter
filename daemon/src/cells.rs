@@ -42,21 +42,38 @@ pub async fn get_live(
         ));
     }
 
-    let store = state.cell_store.read().await;
-    let qmdl = state.qmdl_store_lock.read().await;
-    let recording_name = qmdl
-        .current_entry
-        .map(|i| qmdl.manifest.entries[i].name.clone());
-    drop(qmdl);
+    // IMPORTANT: never hold cell_store.read and qmdl_store.read simultaneously.
+    // The hot diag loop holds qmdl_store.write() while awaiting cell_store.write()
+    // (diag.rs:477 → process_container → analyze → harness cell_store.apply).
+    // If we held cell_store.read here and awaited qmdl_store.read, we'd deadlock:
+    //   API:      cell_store.read held, await qmdl_store.read
+    //   Hot loop: qmdl_store.write held, await cell_store.write
+    // Solution: grab recording_name first (with qmdl lock released), then snapshot cell_store.
+    let recording_name = {
+        let qmdl = state.qmdl_store_lock.read().await;
+        qmdl.current_entry
+            .map(|i| qmdl.manifest.entries[i].name.clone())
+    };
+
+    let (context, total, rsrp_hist, neigh_hist, aggregates) = {
+        let store = state.cell_store.read().await;
+        (
+            store.current_context(state.config.bts_observatory.max_neighbors_in_context),
+            store.len(),
+            store.serving_rsrp_history(),
+            store.neighbor_count_history(),
+            store.aggregates(),
+        )
+    };
 
     Ok(Json(LiveCells {
         mode: "live",
         recording_name,
-        context: store.current_context(state.config.bts_observatory.max_neighbors_in_context),
-        total_cells_seen: store.len(),
-        serving_rsrp_history: store.serving_rsrp_history(),
-        neighbor_count_history: store.neighbor_count_history(),
-        aggregates: store.aggregates(),
+        context,
+        total_cells_seen: total,
+        serving_rsrp_history: rsrp_hist,
+        neighbor_count_history: neigh_hist,
+        aggregates,
     }))
 }
 
