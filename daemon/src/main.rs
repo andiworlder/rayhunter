@@ -1,5 +1,6 @@
 mod analysis;
 mod battery;
+mod cells;
 mod config;
 mod crypto_provider;
 mod diag;
@@ -76,6 +77,7 @@ fn get_router() -> AppRouter {
         .route("/api/test-notification", post(test_notification))
         .route("/api/time", get(get_time))
         .route("/api/time-offset", post(set_time_offset))
+        .route("/api/cells/live", get(crate::cells::get_live))
         .route("/api/debug/display-state", post(debug_set_display_state))
         .route("/", get(|| async { Redirect::permanent("/index.html") }))
         .route("/{*path}", get(serve_static))
