@@ -53,7 +53,7 @@ impl AnalysisWriter {
     ) -> Result<EventType, std::io::Error> {
         let mut max_type = EventType::Informational;
 
-        for row in self.harness.analyze_qmdl_messages(container) {
+        for row in self.harness.analyze_qmdl_messages(container).await {
             if !row.is_empty() {
                 self.write(&row).await?;
             }

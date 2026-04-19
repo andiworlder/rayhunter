@@ -99,7 +99,7 @@ async fn analyze_pcap(pcap_path: &str, show_skipped: bool) {
     let mut report = Report::new(pcap_path);
     while let Some(Ok(block)) = pcap_reader.next_block().await {
         let row = match block {
-            Block::EnhancedPacket(packet) => harness.analyze_pcap_packet(packet),
+            Block::EnhancedPacket(packet) => harness.analyze_pcap_packet(packet).await,
             other => {
                 debug!("{pcap_path}: skipping pcap packet {other:?}");
                 continue;
@@ -130,7 +130,7 @@ async fn analyze_qmdl(qmdl_path: &str, show_skipped: bool) {
         .await
         .expect("failed getting QMDL container")
     {
-        for row in harness.analyze_qmdl_messages(container) {
+        for row in harness.analyze_qmdl_messages(container).await {
             report.process_row(row);
         }
     }
