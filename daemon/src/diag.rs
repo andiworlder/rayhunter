@@ -30,6 +30,7 @@ use crate::notifications::{Notification, NotificationType};
 use crate::qmdl_store::{RecordingStore, RecordingStoreError};
 use crate::server::ServerState;
 use crate::stats::DiskStats;
+use rayhunter::cell::store::CellStore;
 
 const DISK_CHECK_BYTES_INTERVAL: usize = 256 * 1024;
 
@@ -59,6 +60,8 @@ pub struct DiagTask {
     max_type_seen: EventType,
     bytes_since_space_check: usize,
     low_space_warned: bool,
+    /// Shared live CellStore — reset here at the start of each new recording.
+    cell_store: Arc<RwLock<CellStore>>,
 }
 
 enum DiagState {
@@ -103,6 +106,7 @@ impl DiagTask {
         notification_channel: tokio::sync::mpsc::Sender<Notification>,
         min_space_to_start_mb: u64,
         min_space_to_continue_mb: u64,
+        cell_store: Arc<RwLock<CellStore>>,
     ) -> Self {
         Self {
             ui_update_sender,
@@ -115,6 +119,7 @@ impl DiagTask {
             max_type_seen: EventType::Informational,
             bytes_since_space_check: 0,
             low_space_warned: false,
+            cell_store,
         }
     }
 
@@ -151,9 +156,17 @@ impl DiagTask {
                 return Err(msg);
             }
         };
+        // Reset the shared CellStore before the new recording begins so the
+        // flush task starts with a clean slate.
+        self.cell_store.write().await.reset();
         self.stop_current_recording().await;
         let qmdl_writer = QmdlWriter::new(qmdl_file);
-        let analysis_writer = match AnalysisWriter::new(analysis_file, &self.analyzer_config).await
+        let analysis_writer = match AnalysisWriter::new(
+            analysis_file,
+            &self.analyzer_config,
+            self.cell_store.clone(),
+        )
+        .await
         {
             Ok(writer) => Box::new(writer),
             Err(e) => {
@@ -183,6 +196,30 @@ impl DiagTask {
             && let Err(e) = qmdl_store.set_current_stop_reason(reason).await
         {
             warn!("couldn't set stop reason: {e}");
+        }
+        // Flush the CellStore one final time before closing the entry.
+        if let Some((idx, _)) = qmdl_store.get_current_entry() {
+            let name = qmdl_store.manifest.entries[idx].name.clone();
+            let base = qmdl_store.path.clone();
+            let ts = rayhunter::clock::get_adjusted_now().fixed_offset();
+            let line = self.cell_store.read().await.serialize_flush_line(ts);
+            let path = base.join(format!("{name}.cells.ndjson"));
+            match tokio::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .await
+            {
+                Ok(mut f) => {
+                    use tokio::io::AsyncWriteExt;
+                    if let Err(e) = f.write_all(line.as_bytes()).await {
+                        warn!("cells final flush write failed: {e}");
+                    } else if let Err(e) = f.write_all(b"\n").await {
+                        warn!("cells final flush newline failed: {e}");
+                    }
+                }
+                Err(e) => warn!("cells final flush open failed: {e}"),
+            }
         }
         if let Some((_, entry)) = qmdl_store.get_current_entry()
             && let Err(e) = self
@@ -380,10 +417,11 @@ pub fn run_diag_read_thread(
     notification_channel: tokio::sync::mpsc::Sender<Notification>,
     min_space_to_start_mb: u64,
     min_space_to_continue_mb: u64,
+    cell_store: Arc<RwLock<CellStore>>,
 ) {
     task_tracker.spawn(async move {
         let mut diag_stream = pin!(dev.as_stream().into_stream());
-        let mut diag_task = DiagTask::new(ui_update_sender, analysis_sender, analyzer_config, notification_channel, min_space_to_start_mb, min_space_to_continue_mb);
+        let mut diag_task = DiagTask::new(ui_update_sender, analysis_sender, analyzer_config, notification_channel, min_space_to_start_mb, min_space_to_continue_mb, cell_store);
         qmdl_file_tx
             .send(DiagDeviceCtrlMessage::StartRecording { response_tx: None })
             .await

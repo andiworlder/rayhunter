@@ -354,9 +354,22 @@ impl Harness {
         )
     }
 
-    pub fn new_with_config(analyzer_config: &AnalyzerConfig) -> Self {
-        let mut harness = Harness::new();
+    /// Returns a clone of the Arc wrapping the CellStore, so callers can flush
+    /// it to disk without going through the Harness.
+    pub fn get_store(&self) -> std::sync::Arc<tokio::sync::RwLock<crate::cell::store::CellStore>> {
+        self.store.clone()
+    }
 
+    pub fn new_with_config_and_store(
+        analyzer_config: &AnalyzerConfig,
+        store: std::sync::Arc<tokio::sync::RwLock<crate::cell::store::CellStore>>,
+    ) -> Self {
+        let mut harness = Self::new_with_store(store, 8);
+        Self::populate_analyzers_from_config(&mut harness, analyzer_config);
+        harness
+    }
+
+    fn populate_analyzers_from_config(harness: &mut Harness, analyzer_config: &AnalyzerConfig) {
         if analyzer_config.imsi_requested {
             harness.add_analyzer(Box::new(ImsiRequestedAnalyzer::new()));
         }
@@ -369,23 +382,23 @@ impl Harness {
         if analyzer_config.null_cipher {
             harness.add_analyzer(Box::new(NullCipherAnalyzer {}));
         }
-
         if analyzer_config.nas_null_cipher {
             harness.add_analyzer(Box::new(NasNullCipherAnalyzer {}))
         }
-
         if analyzer_config.incomplete_sib {
             harness.add_analyzer(Box::new(IncompleteSibAnalyzer {}))
         }
-
         if analyzer_config.test_analyzer {
             harness.add_analyzer(Box::new(TestAnalyzer {}))
         }
-
         if analyzer_config.diagnostic_analyzer {
             harness.add_analyzer(Box::new(DiagnosticAnalyzer {}));
         }
+    }
 
+    pub fn new_with_config(analyzer_config: &AnalyzerConfig) -> Self {
+        let mut harness = Harness::new();
+        Self::populate_analyzers_from_config(&mut harness, analyzer_config);
         harness
     }
 

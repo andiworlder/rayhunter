@@ -12,6 +12,8 @@ mod qmdl_store;
 mod server;
 mod stats;
 
+use rayhunter::cell::store::CellStore;
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -29,7 +31,8 @@ use crate::server::{
 use crate::stats::{get_qmdl_manifest, get_system_stats};
 
 use analysis::{
-    AnalysisCtrlMessage, AnalysisStatus, get_analysis_status, run_analysis_thread, start_analysis,
+    AnalysisCtrlMessage, AnalysisStatus, get_analysis_status, run_analysis_thread,
+    run_cell_flush_task, start_analysis,
 };
 use axum::Router;
 use axum::response::Redirect;
@@ -198,6 +201,9 @@ async fn run_with_config(
     let store = init_qmdl_store(&config).await?;
     let analysis_status = AnalysisStatus::new(&store);
     let qmdl_store_lock = Arc::new(RwLock::new(store));
+    // Shared live CellStore — reset on each new recording, flushed periodically.
+    // TODO(Task 15): take capacity (120) from BtsObservatoryConfig
+    let cell_store = Arc::new(RwLock::new(CellStore::new(120)));
     let (diag_tx, diag_rx) = mpsc::channel::<DiagDeviceCtrlMessage>(1);
     let (ui_update_tx, ui_update_rx) = mpsc::channel::<display::DisplayState>(1);
     let (analysis_tx, analysis_rx) = mpsc::channel::<AnalysisCtrlMessage>(5);
@@ -232,6 +238,7 @@ async fn run_with_config(
             notification_service.new_handler(),
             config.min_space_to_start_recording_mb,
             config.min_space_to_continue_recording_mb,
+            cell_store.clone(),
         );
         info!("Starting UI");
 
@@ -261,6 +268,14 @@ async fn run_with_config(
         qmdl_store_lock.clone(),
         analysis_status_lock.clone(),
         config.analyzers.clone(),
+    );
+
+    // Spawn periodic CellStore flush task (Piece A of Task 14).
+    run_cell_flush_task(
+        &task_tracker,
+        cell_store.clone(),
+        qmdl_store_lock.clone(),
+        restart_token.clone(),
     );
 
     run_shutdown_thread(
@@ -293,6 +308,7 @@ async fn run_with_config(
         analysis_sender: analysis_tx,
         daemon_restart_token: restart_token.clone(),
         ui_update_sender: Some(ui_update_tx),
+        cell_store,
     });
     run_server(&task_tracker, state, shutdown_token.clone()).await;
 
