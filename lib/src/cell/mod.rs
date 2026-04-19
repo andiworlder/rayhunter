@@ -5,3 +5,4 @@ pub mod signal;
 pub mod store;
 
 pub use identity::{CellIdentity, CellKey, Plmn};
+pub use signal::SignalSample;
