@@ -18,10 +18,23 @@ pub enum InformationElementError {
     UnsupportedGsmtapType(GsmtapType),
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct GsmMeta {
+    pub arfcn: Option<u16>,
+    pub signal_dbm: Option<i8>,
+    pub frame_number: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct UmtsMeta {
+    pub uarfcn: Option<u32>,
+    pub signal_dbm: Option<i8>,
+}
+
 #[derive(Debug)]
 pub enum InformationElement {
-    GSM,
-    UMTS,
+    GSM(GsmMeta),
+    UMTS(UmtsMeta),
     // This element of the enum is substantially larger than the others,
     // so we box it to prevent the size of the enum (any variant) from blowing up.
     LTE(Box<LteInformationElement>),
@@ -96,6 +109,21 @@ impl TryFrom<&GsmtapMessage> for InformationElement {
                 Ok(InformationElement::LTE(Box::new(
                     LteInformationElement::NAS(msg),
                 )))
+            }
+            GsmtapType::Um(_) | GsmtapType::Abis => {
+                let header = &gsmtap_msg.header;
+                Ok(InformationElement::GSM(GsmMeta {
+                    arfcn: Some(header.arfcn),
+                    signal_dbm: Some(header.signal_dbm),
+                    frame_number: Some(header.frame_number),
+                }))
+            }
+            GsmtapType::UmtsRrc(_) | GsmtapType::UmtsRlcMac => {
+                let header = &gsmtap_msg.header;
+                Ok(InformationElement::UMTS(UmtsMeta {
+                    uarfcn: Some(header.arfcn as u32),
+                    signal_dbm: Some(header.signal_dbm),
+                }))
             }
             _ => Err(InformationElementError::UnsupportedGsmtapType(
                 gsmtap_msg.header.gsmtap_type,
