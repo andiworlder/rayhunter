@@ -47,7 +47,7 @@ impl Default for AnalyzerConfig {
     }
 }
 
-pub const REPORT_VERSION: u32 = 2;
+pub const REPORT_VERSION: u32 = 3;
 
 /// The severity level of an event.
 ///
@@ -110,6 +110,8 @@ impl<'de> Deserialize<'de> for EventType {
 pub struct Event {
     pub event_type: EventType,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_context: Option<crate::cell::CellContext>,
 }
 
 /// An [Analyzer] represents one type of heuristic for detecting an IMSI Catcher
