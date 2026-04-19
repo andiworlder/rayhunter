@@ -78,6 +78,8 @@ fn get_router() -> AppRouter {
         .route("/api/time", get(get_time))
         .route("/api/time-offset", post(set_time_offset))
         .route("/api/cells/live", get(crate::cells::get_live))
+        .route("/api/cells/{name}", get(crate::cells::get_replay))
+        .route("/api/cells/{name}/timeseries", get(crate::cells::get_timeseries))
         .route("/api/debug/display-state", post(debug_set_display_state))
         .route("/", get(|| async { Redirect::permanent("/index.html") }))
         .route("/{*path}", get(serve_static))
