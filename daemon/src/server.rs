@@ -95,8 +95,12 @@ pub async fn serve_static(
     Path(path): Path<String>,
 ) -> Response {
     let p = path.trim_start_matches('/');
-    // Map /cells → cells.html
-    let p = if p == "cells" { "cells.html" } else { p };
+    // Map SPA routes and index to their actual file paths in the build dir.
+    let p = match p {
+        "cells" => "cells.html",
+        "index.html" => "index.html.gz",
+        other => other,
+    };
 
     if let Some(file) = WEB.get_file(p) {
         let ct = match std::path::Path::new(p).extension().and_then(|e| e.to_str()) {
