@@ -41,8 +41,9 @@ impl AnalysisWriter {
         file: File,
         analyzer_config: &AnalyzerConfig,
         cell_store: Arc<RwLock<CellStore>>,
+        max_neighbors_in_context: usize,
     ) -> Result<Self, std::io::Error> {
-        let harness = Harness::new_with_config_and_store(analyzer_config, cell_store.clone());
+        let harness = Harness::new_with_config_and_store(analyzer_config, cell_store.clone(), max_neighbors_in_context);
 
         let mut result = Self {
             writer: BufWriter::new(file),
@@ -146,6 +147,7 @@ async fn perform_analysis(
     name: &str,
     qmdl_store_lock: Arc<RwLock<RecordingStore>>,
     analyzer_config: &AnalyzerConfig,
+    max_neighbors_in_context: usize,
 ) -> Result<(), String> {
     info!("Opening QMDL and analysis file for {name}...");
     let (analysis_file, qmdl_file) = {
@@ -168,7 +170,7 @@ async fn perform_analysis(
     // For offline re-analysis we use a fresh, ephemeral store — not the
     // shared live store — because replay should not pollute the running aggregate.
     let ephemeral_store = Arc::new(RwLock::new(CellStore::new(120)));
-    let mut analysis_writer = AnalysisWriter::new(analysis_file, analyzer_config, ephemeral_store)
+    let mut analysis_writer = AnalysisWriter::new(analysis_file, analyzer_config, ephemeral_store, max_neighbors_in_context)
         .await
         .map_err(|e| format!("{e:?}"))?;
     let file_size = qmdl_file
@@ -210,6 +212,7 @@ pub fn run_analysis_thread(
     qmdl_store_lock: Arc<RwLock<RecordingStore>>,
     analysis_status_lock: Arc<RwLock<AnalysisStatus>>,
     analyzer_config: AnalyzerConfig,
+    max_neighbors_in_context: usize,
 ) {
     task_tracker.spawn(async move {
         loop {
@@ -219,7 +222,7 @@ pub fn run_analysis_thread(
                     for _ in 0..count {
                         let name = dequeue_to_running(analysis_status_lock.clone()).await;
                         if let Err(err) =
-                            perform_analysis(&name, qmdl_store_lock.clone(), &analyzer_config).await
+                            perform_analysis(&name, qmdl_store_lock.clone(), &analyzer_config, max_neighbors_in_context).await
                         {
                             error!("failed to analyze {name}: {err}");
                         }
@@ -270,11 +273,11 @@ pub fn run_cell_flush_task(
     cell_store: Arc<RwLock<CellStore>>,
     qmdl_store_lock: Arc<RwLock<RecordingStore>>,
     daemon_restart_token: CancellationToken,
+    flush_interval_seconds: u64,
 ) {
     task_tracker.spawn(async move {
-        // TODO(Task 15): take flush_interval_seconds from BtsObservatoryConfig
         let mut ticker =
-            tokio::time::interval(std::time::Duration::from_secs(10));
+            tokio::time::interval(std::time::Duration::from_secs(flush_interval_seconds));
         loop {
             tokio::select! {
                 _ = ticker.tick() => {

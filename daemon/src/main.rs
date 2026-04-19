@@ -202,8 +202,9 @@ async fn run_with_config(
     let analysis_status = AnalysisStatus::new(&store);
     let qmdl_store_lock = Arc::new(RwLock::new(store));
     // Shared live CellStore — reset on each new recording, flushed periodically.
-    // TODO(Task 15): take capacity (120) from BtsObservatoryConfig
-    let cell_store = Arc::new(RwLock::new(CellStore::new(120)));
+    let cell_store = Arc::new(RwLock::new(CellStore::new(
+        config.bts_observatory.live_ring_buffer_size,
+    )));
     let (diag_tx, diag_rx) = mpsc::channel::<DiagDeviceCtrlMessage>(1);
     let (ui_update_tx, ui_update_rx) = mpsc::channel::<display::DisplayState>(1);
     let (analysis_tx, analysis_rx) = mpsc::channel::<AnalysisCtrlMessage>(5);
@@ -239,6 +240,7 @@ async fn run_with_config(
             config.min_space_to_start_recording_mb,
             config.min_space_to_continue_recording_mb,
             cell_store.clone(),
+            config.bts_observatory.max_neighbors_in_context,
         );
         info!("Starting UI");
 
@@ -268,15 +270,19 @@ async fn run_with_config(
         qmdl_store_lock.clone(),
         analysis_status_lock.clone(),
         config.analyzers.clone(),
+        config.bts_observatory.max_neighbors_in_context,
     );
 
-    // Spawn periodic CellStore flush task (Piece A of Task 14).
-    run_cell_flush_task(
-        &task_tracker,
-        cell_store.clone(),
-        qmdl_store_lock.clone(),
-        restart_token.clone(),
-    );
+    // Spawn periodic CellStore flush task — gated on the master enable switch.
+    if config.bts_observatory.enabled {
+        run_cell_flush_task(
+            &task_tracker,
+            cell_store.clone(),
+            qmdl_store_lock.clone(),
+            restart_token.clone(),
+            config.bts_observatory.flush_interval_seconds,
+        );
+    }
 
     run_shutdown_thread(
         &task_tracker,

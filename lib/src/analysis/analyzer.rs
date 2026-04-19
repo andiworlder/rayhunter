@@ -363,8 +363,9 @@ impl Harness {
     pub fn new_with_config_and_store(
         analyzer_config: &AnalyzerConfig,
         store: std::sync::Arc<tokio::sync::RwLock<crate::cell::store::CellStore>>,
+        max_neighbors_in_context: usize,
     ) -> Self {
-        let mut harness = Self::new_with_store(store, 8);
+        let mut harness = Self::new_with_store(store, max_neighbors_in_context);
         Self::populate_analyzers_from_config(&mut harness, analyzer_config);
         harness
     }

@@ -62,6 +62,8 @@ pub struct DiagTask {
     low_space_warned: bool,
     /// Shared live CellStore — reset here at the start of each new recording.
     cell_store: Arc<RwLock<CellStore>>,
+    /// Max neighbors to include in a cell context snapshot attached to an Event.
+    max_neighbors_in_context: usize,
 }
 
 enum DiagState {
@@ -99,6 +101,7 @@ fn check_disk_space(path: &std::path::Path, warning_mb: u64, critical_mb: u64) -
 }
 
 impl DiagTask {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         ui_update_sender: Sender<display::DisplayState>,
         analysis_sender: Sender<AnalysisCtrlMessage>,
@@ -107,6 +110,7 @@ impl DiagTask {
         min_space_to_start_mb: u64,
         min_space_to_continue_mb: u64,
         cell_store: Arc<RwLock<CellStore>>,
+        max_neighbors_in_context: usize,
     ) -> Self {
         Self {
             ui_update_sender,
@@ -120,6 +124,7 @@ impl DiagTask {
             bytes_since_space_check: 0,
             low_space_warned: false,
             cell_store,
+            max_neighbors_in_context,
         }
     }
 
@@ -165,6 +170,7 @@ impl DiagTask {
             analysis_file,
             &self.analyzer_config,
             self.cell_store.clone(),
+            self.max_neighbors_in_context,
         )
         .await
         {
@@ -418,10 +424,11 @@ pub fn run_diag_read_thread(
     min_space_to_start_mb: u64,
     min_space_to_continue_mb: u64,
     cell_store: Arc<RwLock<CellStore>>,
+    max_neighbors_in_context: usize,
 ) {
     task_tracker.spawn(async move {
         let mut diag_stream = pin!(dev.as_stream().into_stream());
-        let mut diag_task = DiagTask::new(ui_update_sender, analysis_sender, analyzer_config, notification_channel, min_space_to_start_mb, min_space_to_continue_mb, cell_store);
+        let mut diag_task = DiagTask::new(ui_update_sender, analysis_sender, analyzer_config, notification_channel, min_space_to_start_mb, min_space_to_continue_mb, cell_store, max_neighbors_in_context);
         qmdl_file_tx
             .send(DiagDeviceCtrlMessage::StartRecording { response_tx: None })
             .await

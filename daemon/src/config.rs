@@ -7,6 +7,31 @@ use rayhunter::analysis::analyzer::AnalyzerConfig;
 use crate::error::RayhunterError;
 use crate::notifications::NotificationType;
 
+/// Configuration for the BTS Observatory feature.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "apidocs", derive(utoipa::ToSchema))]
+pub struct BtsObservatoryConfig {
+    /// Master enable switch for the BTS Observatory feature.
+    pub enabled: bool,
+    /// Size of the in-memory ring buffers for RSRP history and neighbor counts.
+    pub live_ring_buffer_size: usize,
+    /// How often to flush aggregated state to disk (seconds).
+    pub flush_interval_seconds: u64,
+    /// Max neighbors attached to a single Event.cell_context snapshot.
+    pub max_neighbors_in_context: usize,
+}
+
+impl Default for BtsObservatoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            live_ring_buffer_size: 120,
+            flush_interval_seconds: 10,
+            max_neighbors_in_context: 8,
+        }
+    }
+}
+
 /// The structure of a valid rayhunter configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -34,6 +59,8 @@ pub struct Config {
     pub analyzers: AnalyzerConfig,
     pub min_space_to_start_recording_mb: u64,
     pub min_space_to_continue_recording_mb: u64,
+    #[serde(default)]
+    pub bts_observatory: BtsObservatoryConfig,
 }
 
 impl Default for Config {
@@ -51,6 +78,7 @@ impl Default for Config {
             enabled_notifications: vec![NotificationType::Warning, NotificationType::LowBattery],
             min_space_to_start_recording_mb: 1,
             min_space_to_continue_recording_mb: 1,
+            bts_observatory: BtsObservatoryConfig::default(),
         }
     }
 }
