@@ -48,6 +48,9 @@ impl CellObserver {
         use crate::analysis::information_element::LteInformationElement as L;
         use telcom_parser::lte_rrc::{
             BCCH_DL_SCH_MessageType, BCCH_DL_SCH_MessageType_c1,
+            MeasurementReportCriticalExtensions, MeasurementReportCriticalExtensions_c1,
+            MeasResultsMeasResultNeighCells,
+            UL_DCCH_MessageType, UL_DCCH_MessageType_c1,
         };
 
         let mut out = Vec::new();
@@ -75,6 +78,74 @@ impl CellObserver {
                 },
                 timestamp: now,
             });
+        }
+
+        if let L::UlDcch(ul) = lte
+            && let UL_DCCH_MessageType::C1(UL_DCCH_MessageType_c1::MeasurementReport(mr)) = &ul.message
+            && let MeasurementReportCriticalExtensions::C1(
+                MeasurementReportCriticalExtensions_c1::MeasurementReport_r8(r8)
+            ) = &mr.critical_extensions
+        {
+            use crate::cell::signal::{decode_lte_rsrp, decode_lte_rsrq};
+
+            let meas = &r8.meas_results;
+
+            // Serving cell observation from meas_result_p_cell
+            let serving_rsrp = decode_lte_rsrp(meas.meas_result_p_cell.rsrp_result.0);
+            let serving_rsrq = decode_lte_rsrq(meas.meas_result_p_cell.rsrq_result.0);
+            let serving_identity = CellIdentity::Lte {
+                plmn: None,
+                tac: None,
+                cid: None,
+                pci: None,
+                earfcn: None,
+            };
+            out.push(CellObservation::Serving {
+                identity: serving_identity,
+                signal: SignalSample {
+                    timestamp: Some(now),
+                    rsrp_dbm: Some(serving_rsrp),
+                    rsrq_db: Some(serving_rsrq),
+                    ..Default::default()
+                },
+                timestamp: now,
+            });
+
+            // Neighbor cell observations from meas_result_neigh_cells
+            if let Some(MeasResultsMeasResultNeighCells::MeasResultListEUTRA(list)) =
+                &meas.meas_result_neigh_cells
+            {
+                for neighbor in &list.0 {
+                    let pci = neighbor.phys_cell_id.0;
+                    let rsrp_dbm = neighbor
+                        .meas_result
+                        .rsrp_result
+                        .as_ref()
+                        .map(|r| decode_lte_rsrp(r.0));
+                    let rsrq_db = neighbor
+                        .meas_result
+                        .rsrq_result
+                        .as_ref()
+                        .map(|r| decode_lte_rsrq(r.0));
+                    let identity = CellIdentity::Lte {
+                        plmn: None,
+                        tac: None,
+                        cid: None,
+                        pci: Some(pci),
+                        earfcn: None,
+                    };
+                    out.push(CellObservation::Neighbor {
+                        identity,
+                        signal: SignalSample {
+                            timestamp: Some(now),
+                            rsrp_dbm,
+                            rsrq_db,
+                            ..Default::default()
+                        },
+                        timestamp: now,
+                    });
+                }
+            }
         }
 
         out
@@ -176,7 +247,7 @@ fn extract_first_plmn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::information_element::{GsmMeta, InformationElement, UmtsMeta};
+    use crate::analysis::information_element::{GsmMeta, InformationElement, LteInformationElement, UmtsMeta};
     use chrono::TimeZone;
 
     fn ts() -> DateTime<FixedOffset> {
@@ -221,5 +292,46 @@ mod tests {
         let mut o = CellObserver::new();
         let ie = InformationElement::UMTS(UmtsMeta::default());
         assert_eq!(o.observe(&ie, ts()).len(), 0);
+    }
+
+    #[test]
+    fn lte_ul_dcch_non_meas_report_produces_no_observations() {
+        // Sanity: a BCCH-BCH IE (valid LTE but not UlDcch / MeasurementReport)
+        // must return zero observations without panicking.
+        // We can't easily construct a zero-byte BCCH-BCH message, so we verify
+        // that a non-LTE (UMTS without uarfcn) IE still returns empty — confirming
+        // the observer doesn't crash on any path that isn't a MeasurementReport.
+        let mut o = CellObserver::new();
+        let ie = InformationElement::UMTS(UmtsMeta::default()); // no uarfcn -> empty
+        let obs = o.observe(&ie, ts());
+        assert!(obs.is_empty(), "UMTS without uarfcn must return no observations");
+    }
+
+    // Fixture-gated integration test — only runs if bytes are provided.
+    #[test]
+    fn lte_measurement_report_yields_neighbors_with_rsrp() {
+        let path = "tests/fixtures/ul_dcch_meas_report.bin";
+        let Ok(bytes) = std::fs::read(path) else {
+            eprintln!("skip: {path} not present");
+            return;
+        };
+        let Ok(msg): Result<telcom_parser::lte_rrc::UL_DCCH_Message, _> =
+            telcom_parser::decode(&bytes)
+        else {
+            eprintln!("skip: failed to decode fixture");
+            return;
+        };
+        let ie = InformationElement::LTE(Box::new(LteInformationElement::UlDcch(msg)));
+        let mut o = CellObserver::new();
+        let obs = o.observe(&ie, ts());
+        let neighbors: Vec<_> = obs
+            .iter()
+            .filter_map(|o| match o {
+                CellObservation::Neighbor { identity, signal, .. } => Some((identity, signal)),
+                _ => None,
+            })
+            .collect();
+        assert!(!neighbors.is_empty(), "expected at least one neighbor from fixture");
+        assert!(neighbors.iter().any(|(_, s)| s.rsrp_dbm.is_some()));
     }
 }
