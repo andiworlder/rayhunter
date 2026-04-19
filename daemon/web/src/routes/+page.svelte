@@ -132,6 +132,26 @@
                 />
             </svg>
         </button>
+        <a href="/cells" class="flex flex-row gap-1 group">
+            <span class="hidden text-white group-hover:text-gray-400 lg:flex">BTS Monitor</span>
+            <svg
+                class="w-6 h-6 text-white group-hover:text-gray-400"
+                aria-hidden="true"
+                xmlns="http://www.w3.org/2000/svg"
+                width="24"
+                height="24"
+                fill="none"
+                viewBox="0 0 24 24"
+            >
+                <path
+                    stroke="currentColor"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M8.5 11.5 11 14l4-4m-8.5 7h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H6.5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2Z"
+                />
+            </svg>
+        </a>
         <div class="w-px bg-white/30 self-stretch"></div>
         <a
             class="flex flex-row gap-1 group"
