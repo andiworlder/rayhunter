@@ -98,6 +98,31 @@ impl CellIdentity {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CellKey {
+    LteByCid { plmn: Plmn, cid: u64 },
+    LteByPci { pci: u16, earfcn: Option<u32> },
+    UmtsByCid { plmn: Plmn, cid: u32 },
+    UmtsByPsc { psc: u16, uarfcn: Option<u32> },
+    GsmByCid { plmn: Plmn, cid: u32 },
+    GsmByArfcn { arfcn: u16, bsic: Option<u8> },
+    Unknown { rat: &'static str },
+}
+
+impl From<&CellIdentity> for CellKey {
+    fn from(id: &CellIdentity) -> Self {
+        match id {
+            CellIdentity::Lte { plmn: Some(p), cid: Some(c), .. } => CellKey::LteByCid { plmn: *p, cid: *c },
+            CellIdentity::Lte { pci: Some(pci), earfcn, .. } => CellKey::LteByPci { pci: *pci, earfcn: *earfcn },
+            CellIdentity::Umts { plmn: Some(p), cid: Some(c), .. } => CellKey::UmtsByCid { plmn: *p, cid: *c },
+            CellIdentity::Umts { psc: Some(psc), uarfcn, .. } => CellKey::UmtsByPsc { psc: *psc, uarfcn: *uarfcn },
+            CellIdentity::Gsm { plmn: Some(p), cid: Some(c), .. } => CellKey::GsmByCid { plmn: *p, cid: *c },
+            CellIdentity::Gsm { arfcn: Some(a), bsic, .. } => CellKey::GsmByArfcn { arfcn: *a, bsic: *bsic },
+            other => CellKey::Unknown { rat: other.rat() },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +155,24 @@ mod tests {
         assert_eq!(*cid, Some(23401));
         assert_eq!(*pci, Some(142));
         assert_eq!(*earfcn, Some(1350));
+    }
+
+    #[test]
+    fn cellkey_prefers_cid_when_available() {
+        let id = CellIdentity::Lte {
+            plmn: Some(Plmn { mcc: 510, mnc: 10, mnc_is_3_digit: false }),
+            tac: Some(1280), cid: Some(23401), pci: Some(142), earfcn: Some(1350),
+        };
+        let k = CellKey::from(&id);
+        assert_eq!(k, CellKey::LteByCid { plmn: Plmn { mcc: 510, mnc: 10, mnc_is_3_digit: false }, cid: 23401 });
+    }
+
+    #[test]
+    fn cellkey_falls_back_to_pci_without_cid() {
+        let id = CellIdentity::Lte {
+            plmn: None, tac: None, cid: None, pci: Some(301), earfcn: Some(3050),
+        };
+        let k = CellKey::from(&id);
+        assert_eq!(k, CellKey::LteByPci { pci: 301, earfcn: Some(3050) });
     }
 }

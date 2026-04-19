@@ -4,4 +4,4 @@ pub mod observer;
 pub mod signal;
 pub mod store;
 
-pub use identity::{CellIdentity, Plmn};
+pub use identity::{CellIdentity, CellKey, Plmn};
