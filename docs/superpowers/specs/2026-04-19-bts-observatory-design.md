@@ -35,9 +35,11 @@ The feature exposes a dedicated live-monitoring dashboard in the web UI (modeled
 
 ### 4.1 Radio Access Technologies
 
-- **LTE** — serving identity from SIB1; neighbors from `MeasurementReport` (UL-DCCH).
-- **UMTS (3G)** — serving identity from UMTS SIBs; neighbors from UMTS Measurement Report.
-- **GSM (2G)** — serving identity from System Information Type 3; neighbors from GSM Measurement Report.
+- **LTE (full)** — serving identity from SIB1; neighbors from `MeasurementReport` (UL-DCCH). Full decoder path already present via `telcom-parser`.
+- **UMTS (3G) — scaffolding only in Phase 1.** `InformationElement::UMTS` is currently a unit variant (`lib/src/analysis/information_element.rs:24`). This plan extends it to carry GSMTAP metadata (ARFCN, signal strength from GSMTAP header) so that UMTS packets contribute at least RAT identification and signal strength. Full ASN.1 decoding of UMTS RRC is deferred to a follow-up.
+- **GSM (2G) — scaffolding only in Phase 1.** Same approach: `InformationElement::GSM` extended to carry GSMTAP metadata (ARFCN, signal_dbm, `frame_number`). Full decoding of System Information and Measurement Report in GSM RR is deferred.
+
+Phase 1 therefore yields: LTE = full cell identity + neighbors + signal; GSM/UMTS = one row per unique (ARFCN, RAT) with signal from GSMTAP header, labeled clearly as "limited" in the UI.
 
 ### 4.2 Data Granularity
 
