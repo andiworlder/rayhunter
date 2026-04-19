@@ -4,9 +4,11 @@
     import {
         fetch_live,
         fetch_replay,
+        fetch_alerts_with_context,
         type LiveCells,
         type CellAggregate,
         type NeighborSnapshot,
+        type AlertRow,
     } from '$lib/cells.svelte';
     import ServingCellCard from '$lib/components/ServingCellCard.svelte';
     import NeighborCellsTable from '$lib/components/NeighborCellsTable.svelte';
@@ -22,6 +24,7 @@
 
     let live_data: LiveCells | undefined = $state(undefined);
     let replay_aggregates: CellAggregate[] = $state([]);
+    let alerts: AlertRow[] = $state([]);
 
     $effect(() => {
         let cancel = false;
@@ -36,6 +39,17 @@
                 error = undefined;
             } catch (e) {
                 error = e instanceof Error ? e.message : String(e);
+            }
+            // Fetch alerts best-effort after primary data
+            const recording = mode === 'live' ? live_data?.recording_name : recording_param;
+            if (recording) {
+                try {
+                    alerts = await fetch_alerts_with_context(recording, 'Low');
+                } catch (_) {
+                    // swallow: alerts are best-effort
+                }
+            } else {
+                alerts = [];
             }
         }
 
@@ -157,6 +171,5 @@
         />
     {/if}
 
-    <!-- AlertsStrip is wired in Task 25 -->
-    <AlertsStrip alerts={[]} />
+    <AlertsStrip alerts={alerts} />
 </div>

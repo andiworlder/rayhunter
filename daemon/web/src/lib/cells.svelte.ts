@@ -99,6 +99,79 @@ export function quality_band_rsrp(rsrp: number): { label: string; color: string 
     return { label: 'POOR', color: 'red-500' };
 }
 
+export interface ReportEvent {
+    event_type: 'Informational' | 'Low' | 'Medium' | 'High';
+    message: string;
+    cell_context?: CellContext;
+}
+
+export interface ReportRow {
+    packet_timestamp?: string;
+    skipped_message_reason?: string;
+    events: (ReportEvent | null)[];
+}
+
+export interface ReportMetadata {
+    report_version?: number;
+    rayhunter?: unknown;
+    analyzers?: { name: string; description: string; version: number }[];
+}
+
+/**
+ * Fetch the analysis report for a recording and extract alert rows that
+ * carry a non-null event (severity != Informational).
+ */
+export async function fetch_alerts_with_context(
+    recording_name: string,
+    min_severity: 'Low' | 'Medium' | 'High' = 'Low',
+): Promise<AlertRow[]> {
+    const order: Record<ReportEvent['event_type'], number> = {
+        Informational: 0,
+        Low: 1,
+        Medium: 2,
+        High: 3,
+    };
+    const threshold = order[min_severity];
+
+    const r = await fetch(`/api/analysis-report/${encodeURIComponent(recording_name)}`);
+    if (!r.ok) {
+        // 404 is fine: the recording may not yet have been analyzed.
+        if (r.status === 404) return [];
+        throw new Error(`analysis-report ${r.status}`);
+    }
+    const text = await r.text();
+    const lines = text.split('\n').filter((l) => l.trim().length > 0);
+
+    let analyzer_names: string[] = [];
+    const alerts: AlertRow[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+        try {
+            const parsed = JSON.parse(lines[i]);
+            if (i === 0 && parsed.analyzers) {
+                analyzer_names = (parsed as ReportMetadata).analyzers?.map((a) => a.name) ?? [];
+                continue;
+            }
+            const row = parsed as ReportRow;
+            if (!row.events) continue;
+            row.events.forEach((e, idx) => {
+                if (!e) return;
+                if (order[e.event_type] < threshold) return;
+                alerts.push({
+                    timestamp: row.packet_timestamp ?? '—',
+                    severity: e.event_type,
+                    message: e.message,
+                    analyzer_name: analyzer_names[idx],
+                    cell_context: e.cell_context,
+                });
+            });
+        } catch (_) {
+            // skip malformed lines
+        }
+    }
+    return alerts;
+}
+
 export function format_plmn(p?: Plmn): string {
     if (!p) return '—';
     const mnc = p.mnc_is_3_digit
