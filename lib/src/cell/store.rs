@@ -40,6 +40,19 @@ pub struct CellContext {
     pub neighbors: Vec<NeighborSnapshot>,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct CellReportMetadata {
+    pub report_version: u32,
+    pub rayhunter_version: String,
+    pub created_at: DateTime<FixedOffset>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct FlushLine {
+    pub flushed_at: DateTime<FixedOffset>,
+    pub aggregates: Vec<CellAggregate>,
+}
+
 pub struct CellStore {
     by_key: HashMap<CellKey, CellAggregate>,
     current_serving_key: Option<CellKey>,
@@ -201,6 +214,41 @@ impl CellStore {
         self.neighbor_count_buffer.clear();
         self.avg_accum.clear();
     }
+
+    /// Serialize the current aggregate snapshot as a single NDJSON line (no trailing newline).
+    pub fn serialize_flush_line(&self, flushed_at: DateTime<FixedOffset>) -> String {
+        let payload = FlushLine {
+            flushed_at,
+            aggregates: self.aggregates(),
+        };
+        serde_json::to_string(&payload).expect("serialize flush line")
+    }
+
+    pub fn serialize_metadata_line(
+        rayhunter_version: &str,
+        created_at: DateTime<FixedOffset>,
+    ) -> String {
+        let meta = CellReportMetadata {
+            report_version: 1,
+            rayhunter_version: rayhunter_version.to_string(),
+            created_at,
+        };
+        serde_json::to_string(&meta).expect("serialize metadata line")
+    }
+
+    /// Given the full contents of a cells.ndjson file, return the most recent flush.
+    pub fn parse_latest_snapshot(contents: &str) -> Option<FlushLine> {
+        let mut last: Option<FlushLine> = None;
+        for line in contents.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Ok(f) = serde_json::from_str::<FlushLine>(line) {
+                last = Some(f);
+            }
+        }
+        last
+    }
 }
 
 fn update_min_max(
@@ -306,5 +354,45 @@ mod tests {
         s.reset();
         assert_eq!(s.len(), 0);
         assert!(s.serving_rsrp_history().is_empty());
+    }
+
+    #[test]
+    fn flush_line_round_trip() {
+        let mut s = CellStore::new(120);
+        s.apply(&CellObservation::Serving {
+            identity: CellIdentity::Lte {
+                plmn: Some(Plmn { mcc: 510, mnc: 11, mnc_is_3_digit: false }),
+                tac: Some(1), cid: Some(1), pci: None, earfcn: None,
+            },
+            signal: SignalSample { rsrp_dbm: Some(-80), ..Default::default() },
+            timestamp: ts(),
+        });
+        let line = s.serialize_flush_line(ts());
+        let snap = CellStore::parse_latest_snapshot(&line).unwrap();
+        assert_eq!(snap.aggregates.len(), 1);
+    }
+
+    #[test]
+    fn parse_latest_snapshot_returns_last_of_many() {
+        let contents = vec![
+            r#"{"flushed_at":"2026-04-19T10:00:00+00:00","aggregates":[]}"#,
+            r#"{"flushed_at":"2026-04-19T10:00:10+00:00","aggregates":[]}"#,
+            r#""#,
+            r#"{"flushed_at":"2026-04-19T10:00:20+00:00","aggregates":[]}"#,
+        ].join("\n");
+        let snap = CellStore::parse_latest_snapshot(&contents).unwrap();
+        assert_eq!(
+            snap.flushed_at.format("%H:%M:%S").to_string(),
+            "10:00:20"
+        );
+    }
+
+    #[test]
+    fn metadata_line_has_expected_fields() {
+        let ts = ts();
+        let line = CellStore::serialize_metadata_line("0.10.2", ts);
+        let meta: CellReportMetadata = serde_json::from_str(&line).unwrap();
+        assert_eq!(meta.report_version, 1);
+        assert_eq!(meta.rayhunter_version, "0.10.2");
     }
 }
