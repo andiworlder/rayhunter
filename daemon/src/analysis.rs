@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::{cmp, future, pin};
 
@@ -7,8 +8,9 @@ use axum::{
     http::StatusCode,
 };
 use futures::TryStreamExt;
-use log::{error, info};
+use log::{error, info, warn};
 use rayhunter::analysis::analyzer::{AnalyzerConfig, EventType, Harness};
+use rayhunter::cell::store::CellStore;
 use rayhunter::diag::{DataType, MessagesContainer};
 use rayhunter::qmdl::QmdlReader;
 use serde::Serialize;
@@ -16,6 +18,7 @@ use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::{RwLock, RwLockWriteGuard};
+use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::qmdl_store::RecordingStore;
@@ -33,8 +36,13 @@ pub struct AnalysisWriter {
 // lets us simply append new rows to the end without parsing the entire JSON
 // object beforehand.
 impl AnalysisWriter {
-    pub async fn new(file: File, analyzer_config: &AnalyzerConfig) -> Result<Self, std::io::Error> {
-        let harness = Harness::new_with_config(analyzer_config);
+    pub async fn new(
+        file: File,
+        analyzer_config: &AnalyzerConfig,
+        cell_store: Arc<RwLock<CellStore>>,
+        max_neighbors_in_context: usize,
+    ) -> Result<Self, std::io::Error> {
+        let harness = Harness::new_with_config_and_store(analyzer_config, cell_store, max_neighbors_in_context);
 
         let mut result = Self {
             writer: BufWriter::new(file),
@@ -53,7 +61,7 @@ impl AnalysisWriter {
     ) -> Result<EventType, std::io::Error> {
         let mut max_type = EventType::Informational;
 
-        for row in self.harness.analyze_qmdl_messages(container) {
+        for row in self.harness.analyze_qmdl_messages(container).await {
             if !row.is_empty() {
                 self.write(&row).await?;
             }
@@ -133,6 +141,7 @@ async fn perform_analysis(
     name: &str,
     qmdl_store_lock: Arc<RwLock<RecordingStore>>,
     analyzer_config: &AnalyzerConfig,
+    max_neighbors_in_context: usize,
 ) -> Result<(), String> {
     info!("Opening QMDL and analysis file for {name}...");
     let (analysis_file, qmdl_file) = {
@@ -152,7 +161,10 @@ async fn perform_analysis(
         (analysis_file, qmdl_file)
     };
 
-    let mut analysis_writer = AnalysisWriter::new(analysis_file, analyzer_config)
+    // For offline re-analysis we use a fresh, ephemeral store — not the
+    // shared live store — because replay should not pollute the running aggregate.
+    let ephemeral_store = Arc::new(RwLock::new(CellStore::new(120)));
+    let mut analysis_writer = AnalysisWriter::new(analysis_file, analyzer_config, ephemeral_store, max_neighbors_in_context)
         .await
         .map_err(|e| format!("{e:?}"))?;
     let file_size = qmdl_file
@@ -194,6 +206,7 @@ pub fn run_analysis_thread(
     qmdl_store_lock: Arc<RwLock<RecordingStore>>,
     analysis_status_lock: Arc<RwLock<AnalysisStatus>>,
     analyzer_config: AnalyzerConfig,
+    max_neighbors_in_context: usize,
 ) {
     task_tracker.spawn(async move {
         loop {
@@ -203,7 +216,7 @@ pub fn run_analysis_thread(
                     for _ in 0..count {
                         let name = dequeue_to_running(analysis_status_lock.clone()).await;
                         if let Err(err) =
-                            perform_analysis(&name, qmdl_store_lock.clone(), &analyzer_config).await
+                            perform_analysis(&name, qmdl_store_lock.clone(), &analyzer_config, max_neighbors_in_context).await
                         {
                             error!("failed to analyze {name}: {err}");
                         }
@@ -215,6 +228,58 @@ pub fn run_analysis_thread(
                     status.finished.push(name);
                 }
                 Some(AnalysisCtrlMessage::Exit) | None => return,
+            }
+        }
+    });
+}
+
+/// Write a single NDJSON flush line for the current recording to
+/// `{store_path}/{name}.cells.ndjson`.  Returns `Ok(())` (silently) if there
+/// is no active recording.
+pub async fn flush_cells_now(
+    cell_store: &Arc<RwLock<CellStore>>,
+    qmdl_store_lock: &Arc<RwLock<RecordingStore>>,
+) -> anyhow::Result<()> {
+    let (base_path, name): (PathBuf, String) = {
+        let qmdl = qmdl_store_lock.read().await;
+        let Some(idx) = qmdl.current_entry else {
+            return Ok(());
+        };
+        (qmdl.path.clone(), qmdl.manifest.entries[idx].name.clone())
+    };
+    let ts = rayhunter::clock::get_adjusted_now().fixed_offset();
+    let line = cell_store.read().await.serialize_flush_line(ts);
+    let path = base_path.join(format!("{name}.cells.ndjson"));
+    let mut f = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .await?;
+    f.write_all(line.as_bytes()).await?;
+    f.write_all(b"\n").await?;
+    Ok(())
+}
+
+/// Spawns a task that periodically flushes the CellStore to
+/// `{store_path}/{name}.cells.ndjson` while a recording is active.
+pub fn run_cell_flush_task(
+    task_tracker: &TaskTracker,
+    cell_store: Arc<RwLock<CellStore>>,
+    qmdl_store_lock: Arc<RwLock<RecordingStore>>,
+    daemon_restart_token: CancellationToken,
+    flush_interval_seconds: u64,
+) {
+    task_tracker.spawn(async move {
+        let mut ticker =
+            tokio::time::interval(std::time::Duration::from_secs(flush_interval_seconds));
+        loop {
+            tokio::select! {
+                _ = ticker.tick() => {
+                    if let Err(e) = flush_cells_now(&cell_store, &qmdl_store_lock).await {
+                        warn!("cells flush failed: {e}");
+                    }
+                }
+                _ = daemon_restart_token.cancelled() => break,
             }
         }
     });

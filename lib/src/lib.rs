@@ -12,6 +12,7 @@ pub fn init_logging(default_level: log::LevelFilter) {
 }
 
 pub mod analysis;
+pub mod cell;
 pub mod clock;
 pub mod diag;
 pub mod gsmtap;

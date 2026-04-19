@@ -38,6 +38,8 @@ pub struct ServerState {
     pub analysis_sender: Sender<AnalysisCtrlMessage>,
     pub daemon_restart_token: CancellationToken,
     pub ui_update_sender: Option<Sender<DisplayState>>,
+    /// Shared live CellStore — reset on each new recording, flushed periodically.
+    pub cell_store: Arc<RwLock<rayhunter::cell::store::CellStore>>,
 }
 
 #[cfg_attr(feature = "apidocs", utoipa::path(
@@ -504,6 +506,9 @@ mod tests {
             analysis_sender: analysis_tx,
             daemon_restart_token: CancellationToken::new(),
             ui_update_sender: None,
+            cell_store: Arc::new(RwLock::new(
+                rayhunter::cell::store::CellStore::new(120),
+            )),
         })
     }
 

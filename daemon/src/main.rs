@@ -1,5 +1,6 @@
 mod analysis;
 mod battery;
+mod cells;
 mod config;
 mod crypto_provider;
 mod diag;
@@ -11,6 +12,8 @@ mod pcap;
 mod qmdl_store;
 mod server;
 mod stats;
+
+use rayhunter::cell::store::CellStore;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -29,7 +32,8 @@ use crate::server::{
 use crate::stats::{get_qmdl_manifest, get_system_stats};
 
 use analysis::{
-    AnalysisCtrlMessage, AnalysisStatus, get_analysis_status, run_analysis_thread, start_analysis,
+    AnalysisCtrlMessage, AnalysisStatus, get_analysis_status, run_analysis_thread,
+    run_cell_flush_task, start_analysis,
 };
 use axum::Router;
 use axum::response::Redirect;
@@ -73,6 +77,9 @@ fn get_router() -> AppRouter {
         .route("/api/test-notification", post(test_notification))
         .route("/api/time", get(get_time))
         .route("/api/time-offset", post(set_time_offset))
+        .route("/api/cells/live", get(crate::cells::get_live))
+        .route("/api/cells/{name}", get(crate::cells::get_replay))
+        .route("/api/cells/{name}/timeseries", get(crate::cells::get_timeseries))
         .route("/api/debug/display-state", post(debug_set_display_state))
         .route("/", get(|| async { Redirect::permanent("/index.html") }))
         .route("/{*path}", get(serve_static))
@@ -198,6 +205,10 @@ async fn run_with_config(
     let store = init_qmdl_store(&config).await?;
     let analysis_status = AnalysisStatus::new(&store);
     let qmdl_store_lock = Arc::new(RwLock::new(store));
+    // Shared live CellStore — reset on each new recording, flushed periodically.
+    let cell_store = Arc::new(RwLock::new(CellStore::new(
+        config.bts_observatory.live_ring_buffer_size,
+    )));
     let (diag_tx, diag_rx) = mpsc::channel::<DiagDeviceCtrlMessage>(1);
     let (ui_update_tx, ui_update_rx) = mpsc::channel::<display::DisplayState>(1);
     let (analysis_tx, analysis_rx) = mpsc::channel::<AnalysisCtrlMessage>(5);
@@ -232,6 +243,8 @@ async fn run_with_config(
             notification_service.new_handler(),
             config.min_space_to_start_recording_mb,
             config.min_space_to_continue_recording_mb,
+            cell_store.clone(),
+            config.bts_observatory.max_neighbors_in_context,
         );
         info!("Starting UI");
 
@@ -261,7 +274,19 @@ async fn run_with_config(
         qmdl_store_lock.clone(),
         analysis_status_lock.clone(),
         config.analyzers.clone(),
+        config.bts_observatory.max_neighbors_in_context,
     );
+
+    // Spawn periodic CellStore flush task — gated on the master enable switch.
+    if config.bts_observatory.enabled {
+        run_cell_flush_task(
+            &task_tracker,
+            cell_store.clone(),
+            qmdl_store_lock.clone(),
+            restart_token.clone(),
+            config.bts_observatory.flush_interval_seconds,
+        );
+    }
 
     run_shutdown_thread(
         &task_tracker,
@@ -293,6 +318,7 @@ async fn run_with_config(
         analysis_sender: analysis_tx,
         daemon_restart_token: restart_token.clone(),
         ui_update_sender: Some(ui_update_tx),
+        cell_store,
     });
     run_server(&task_tracker, state, shutdown_token.clone()).await;
 

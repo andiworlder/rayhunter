@@ -1,0 +1,11 @@
+mcc,mnc,mnc_is_3_digit,country,operator
+510,10,false,Indonesia,Telkomsel
+510,11,false,Indonesia,XL Axiata
+510,21,false,Indonesia,Indosat Ooredoo
+510,89,false,Indonesia,3 (Tri)
+310,260,true,United States,T-Mobile USA
+310,410,true,United States,AT&T Mobility
+311,480,true,United States,Verizon Wireless
+505,1,false,Australia,Telstra
+520,1,false,Thailand,AIS
+520,3,false,Thailand,TrueMove H

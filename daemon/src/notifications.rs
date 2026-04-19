@@ -293,7 +293,7 @@ mod tests {
                 println!("error = {:?}", reqwest_error);
                 assert!(reqwest_error.is_timeout());
             }
-            _ => assert!(false),
+            _ => panic!("expected RequestFailed(timeout), got a different variant"),
         }
     }
 

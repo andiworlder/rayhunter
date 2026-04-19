@@ -47,7 +47,7 @@ impl Default for AnalyzerConfig {
     }
 }
 
-pub const REPORT_VERSION: u32 = 2;
+pub const REPORT_VERSION: u32 = 3;
 
 /// The severity level of an event.
 ///
@@ -110,6 +110,8 @@ impl<'de> Deserialize<'de> for EventType {
 pub struct Event {
     pub event_type: EventType,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_context: Option<crate::cell::CellContext>,
 }
 
 /// An [Analyzer] represents one type of heuristic for detecting an IMSI Catcher
@@ -317,6 +319,9 @@ impl<'de> Deserialize<'de> for AnalysisRow {
 pub struct Harness {
     analyzers: Vec<Box<dyn Analyzer + Send>>,
     packet_num: usize,
+    observer: crate::cell::observer::CellObserver,
+    store: std::sync::Arc<tokio::sync::RwLock<crate::cell::store::CellStore>>,
+    max_neighbors_in_context: usize,
 }
 
 impl Default for Harness {
@@ -326,16 +331,46 @@ impl Default for Harness {
 }
 
 impl Harness {
-    pub fn new() -> Self {
+    pub fn new_with_store(
+        store: std::sync::Arc<tokio::sync::RwLock<crate::cell::store::CellStore>>,
+        max_neighbors_in_context: usize,
+    ) -> Self {
         Self {
             analyzers: Vec::new(),
             packet_num: 0,
+            observer: crate::cell::observer::CellObserver::new(),
+            store,
+            max_neighbors_in_context,
         }
     }
 
-    pub fn new_with_config(analyzer_config: &AnalyzerConfig) -> Self {
-        let mut harness = Harness::new();
+    pub fn new() -> Self {
+        // TODO(task-15): move hardcoded capacity (120) and max_neighbors (8) to config
+        Self::new_with_store(
+            std::sync::Arc::new(tokio::sync::RwLock::new(
+                crate::cell::store::CellStore::new(120),
+            )),
+            8,
+        )
+    }
 
+    /// Returns a clone of the Arc wrapping the CellStore, so callers can flush
+    /// it to disk without going through the Harness.
+    pub fn get_store(&self) -> std::sync::Arc<tokio::sync::RwLock<crate::cell::store::CellStore>> {
+        self.store.clone()
+    }
+
+    pub fn new_with_config_and_store(
+        analyzer_config: &AnalyzerConfig,
+        store: std::sync::Arc<tokio::sync::RwLock<crate::cell::store::CellStore>>,
+        max_neighbors_in_context: usize,
+    ) -> Self {
+        let mut harness = Self::new_with_store(store, max_neighbors_in_context);
+        Self::populate_analyzers_from_config(&mut harness, analyzer_config);
+        harness
+    }
+
+    fn populate_analyzers_from_config(harness: &mut Harness, analyzer_config: &AnalyzerConfig) {
         if analyzer_config.imsi_requested {
             harness.add_analyzer(Box::new(ImsiRequestedAnalyzer::new()));
         }
@@ -348,23 +383,23 @@ impl Harness {
         if analyzer_config.null_cipher {
             harness.add_analyzer(Box::new(NullCipherAnalyzer {}));
         }
-
         if analyzer_config.nas_null_cipher {
             harness.add_analyzer(Box::new(NasNullCipherAnalyzer {}))
         }
-
         if analyzer_config.incomplete_sib {
             harness.add_analyzer(Box::new(IncompleteSibAnalyzer {}))
         }
-
         if analyzer_config.test_analyzer {
             harness.add_analyzer(Box::new(TestAnalyzer {}))
         }
-
         if analyzer_config.diagnostic_analyzer {
             harness.add_analyzer(Box::new(DiagnosticAnalyzer {}));
         }
+    }
 
+    pub fn new_with_config(analyzer_config: &AnalyzerConfig) -> Self {
+        let mut harness = Harness::new();
+        Self::populate_analyzers_from_config(&mut harness, analyzer_config);
         harness
     }
 
@@ -372,12 +407,13 @@ impl Harness {
         self.analyzers.push(analyzer);
     }
 
-    pub fn analyze_pcap_packet(&mut self, packet: EnhancedPacketBlock) -> AnalysisRow {
+    pub async fn analyze_pcap_packet(&mut self, packet: EnhancedPacketBlock<'_>) -> AnalysisRow {
         self.packet_num += 1;
 
         let epoch = DateTime::parse_from_rfc3339("1980-01-06T00:00:00-00:00").unwrap();
+        let ts = epoch + packet.timestamp;
         let mut row = AnalysisRow {
-            packet_timestamp: Some(epoch + packet.timestamp),
+            packet_timestamp: Some(ts),
             skipped_message_reason: None,
             events: Vec::new(),
         };
@@ -398,7 +434,7 @@ impl Harness {
             payload: packet_data.to_vec(),
         };
         row.events = match InformationElement::try_from(&gsmtap_message) {
-            Ok(element) => self.analyze_information_element(&element),
+            Ok(element) => self.analyze_information_element(&element, ts).await,
             Err(err) => {
                 let msg = format!(
                     "in packet {}, failed to convert gsmtap message to IE: {err:?}",
@@ -412,7 +448,7 @@ impl Harness {
         row
     }
 
-    pub fn analyze_qmdl_messages(&mut self, container: MessagesContainer) -> Vec<AnalysisRow> {
+    pub async fn analyze_qmdl_messages(&mut self, container: MessagesContainer) -> Vec<AnalysisRow> {
         let mut rows = Vec::new();
         for maybe_qmdl_message in container.into_messages() {
             self.packet_num += 1;
@@ -443,7 +479,8 @@ impl Harness {
             let Some((timestamp, gsmtap_msg)) = gsmtap_message else {
                 continue;
             };
-            row.packet_timestamp = Some(timestamp.to_datetime());
+            let ts = timestamp.to_datetime();
+            row.packet_timestamp = Some(ts);
 
             let element = match InformationElement::try_from(&gsmtap_msg) {
                 Ok(element) => element,
@@ -453,18 +490,34 @@ impl Harness {
                 }
             };
 
-            row.events = self.analyze_information_element(&element);
+            row.events = self.analyze_information_element(&element, ts).await;
         }
         rows
     }
 
-    fn analyze_information_element(&mut self, ie: &InformationElement) -> Vec<Option<Event>> {
+    async fn analyze_information_element(
+        &mut self,
+        ie: &InformationElement,
+        ts: chrono::DateTime<chrono::FixedOffset>,
+    ) -> Vec<Option<Event>> {
         // This method is private because incrementing packet_num is currently handled entirely by the other
         // methods that call this one. This could be changed with some careful refactoring, but
         // while this method is only used by other Harness methods, let's keep it private to help
         // ensure we always bump packet_num exactly once for each processed packet.
+
+        // Feed the IE to the cell observer and apply each observation to the store.
+        let observations = self.observer.observe(ie, ts);
+        {
+            let mut store = self.store.write().await;
+            for obs in &observations {
+                store.apply(obs);
+            }
+        }
+
         let packet_str = format!(" (packet {})", self.packet_num);
-        self.analyzers
+        let max_neighbors = self.max_neighbors_in_context;
+        let mut events: Vec<Option<Event>> = self
+            .analyzers
             .iter_mut()
             .map(|analyzer| {
                 let mut maybe_event = analyzer.analyze_information_element(ie, self.packet_num);
@@ -473,7 +526,15 @@ impl Harness {
                 }
                 maybe_event
             })
-            .collect()
+            .collect();
+
+        // For every analyzer that emitted a Some(Event), snapshot the current cell context.
+        for maybe_event in events.iter_mut().flatten() {
+            let ctx = self.store.read().await.current_context(max_neighbors);
+            maybe_event.cell_context = Some(ctx);
+        }
+
+        events
     }
 
     pub fn get_metadata(&self) -> ReportMetadata {
