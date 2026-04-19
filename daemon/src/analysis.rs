@@ -27,7 +27,6 @@ use crate::server::ServerState;
 pub struct AnalysisWriter {
     writer: BufWriter<File>,
     harness: Harness,
-    cell_store: Arc<RwLock<CellStore>>,
 }
 
 // We write our analysis results to a file immediately to minimize the amount of
@@ -43,20 +42,15 @@ impl AnalysisWriter {
         cell_store: Arc<RwLock<CellStore>>,
         max_neighbors_in_context: usize,
     ) -> Result<Self, std::io::Error> {
-        let harness = Harness::new_with_config_and_store(analyzer_config, cell_store.clone(), max_neighbors_in_context);
+        let harness = Harness::new_with_config_and_store(analyzer_config, cell_store, max_neighbors_in_context);
 
         let mut result = Self {
             writer: BufWriter::new(file),
             harness,
-            cell_store,
         };
         let metadata = result.harness.get_metadata();
         result.write(&metadata).await?;
         Ok(result)
-    }
-
-    pub fn cell_store(&self) -> Arc<RwLock<CellStore>> {
-        self.cell_store.clone()
     }
 
     // Runs the analysis harness on the given container, serializing the results

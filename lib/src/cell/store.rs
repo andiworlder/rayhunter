@@ -374,7 +374,7 @@ mod tests {
 
     #[test]
     fn parse_latest_snapshot_returns_last_of_many() {
-        let contents = vec![
+        let contents = [
             r#"{"flushed_at":"2026-04-19T10:00:00+00:00","aggregates":[]}"#,
             r#"{"flushed_at":"2026-04-19T10:00:10+00:00","aggregates":[]}"#,
             r#""#,
